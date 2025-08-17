@@ -373,6 +373,11 @@ def run_agent_chat(args, unknown_args):
             "function": "main",
             "argv_name": "amp_wrapper",
         },
+        "gemini": {
+            "module": "integrations.cli_wrappers.gemini.gemini_proxy",
+            "function": "main",
+            "argv_name": "gemini_proxy",
+        },
     }
 
     # Get agent configuration
@@ -397,15 +402,31 @@ def run_agent_chat(args, unknown_args):
     if hasattr(args, "base_url") and args.base_url:
         new_argv.extend(["--base-url", args.base_url])
 
-    # Add Claude-specific flags
-    if hasattr(args, "permission_mode") and args.permission_mode:
-        new_argv.extend(["--permission-mode", args.permission_mode])
+    # Add agent-specific flags
+    if agent == "claude":
+        # Claude-specific flags
+        if hasattr(args, "permission_mode") and args.permission_mode:
+            new_argv.extend(["--permission-mode", args.permission_mode])
 
-    if (
-        hasattr(args, "dangerously_skip_permissions")
-        and args.dangerously_skip_permissions
-    ):
-        new_argv.append("--dangerously-skip-permissions")
+        if (
+            hasattr(args, "dangerously_skip_permissions")
+            and args.dangerously_skip_permissions
+        ):
+            new_argv.append("--dangerously-skip-permissions")
+    
+    elif agent == "gemini":
+        # Gemini-specific flags
+        if hasattr(args, "proxy_port") and args.proxy_port:
+            new_argv.extend(["--port", str(args.proxy_port)])
+        
+        if hasattr(args, "model") and args.model:
+            new_argv.extend(["--model", args.model])
+        
+        if hasattr(args, "capture_thinking") and args.capture_thinking:
+            new_argv.append("--capture-thinking")
+        
+        # Always add debug for better visibility
+        new_argv.append("--debug")
 
     # Add any additional arguments
     if unknown_args:
@@ -501,7 +522,7 @@ def add_global_arguments(parser):
     )
     parser.add_argument(
         "--agent",
-        choices=["claude", "amp"],
+        choices=["claude", "amp", "gemini"],
         default="claude",
         help="Which AI agent to use (default: claude)",
     )
@@ -514,6 +535,23 @@ def add_global_arguments(parser):
         "--dangerously-skip-permissions",
         action="store_true",
         help="Bypass all permission checks. Recommended only for sandboxes with no internet access.",
+    )
+    # Gemini-specific flags
+    parser.add_argument(
+        "--proxy-port",
+        type=int,
+        default=8080,
+        help="Port for Gemini proxy server (default: 8080)",
+    )
+    parser.add_argument(
+        "--model",
+        default="gemini-pro",
+        help="Gemini model to use (default: gemini-pro)",
+    )
+    parser.add_argument(
+        "--capture-thinking",
+        action="store_true",
+        help="Capture and display model thinking/reasoning",
     )
 
 
@@ -531,7 +569,11 @@ Examples:
 
   # Start Amp chat
   omnara --agent=amp
-  omnara --agent=amp --api-key YOUR_API_KEY
+  omnara amp --api-key YOUR_API_KEY
+
+  # Start Gemini proxy
+  omnara gemini
+  omnara gemini --proxy-port 8080 --capture-thinking
 
   # Start webhook server with Cloudflare tunnel
   omnara serve
