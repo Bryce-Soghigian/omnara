@@ -13,6 +13,7 @@ import os
 import pty
 import shutil
 import signal
+import socket
 import subprocess
 import ssl
 import sys
@@ -51,6 +52,24 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def is_port_in_use(port: int) -> bool:
+    """Check if a port is already in use."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(('127.0.0.1', port))
+            return False
+        except socket.error:
+            return True
+
+
+def find_available_port(start_port: int = 8080, max_attempts: int = 100) -> Optional[int]:
+    """Find an available port starting from start_port."""
+    for port in range(start_port, start_port + max_attempts):
+        if not is_port_in_use(port):
+            return port
+    return None
 
 
 class GeminiProxy(BaseProvider):
@@ -94,14 +113,30 @@ class GeminiProxy(BaseProvider):
     
     async def proxy_handler(self, request: Request) -> Response:
         """Main proxy handler for all requests."""
+        # Log all requests for debugging (only non-CONNECT to reduce noise)
+        if request.method != 'CONNECT':
+            logger.info(f"Received {request.method} request to {request.path_qs}")
+        
+        # For CONNECT requests, just return 404 to force direct connection
+        # This relies on NO_PROXY environment variable for auth domains
+        if request.method == 'CONNECT':
+            return Response(text="CONNECT not supported - use direct connection", status=404)
+        
         # Extract the target path
         path = request.match_info.get('path', '')
+        host = request.headers.get('Host', '')
         
-        # Check if this is a Gemini API request
-        if 'models' in path and ('generateContent' in path or 'streamGenerateContent' in path):
+        # Only intercept Gemini API requests, not auth requests
+        is_gemini_api = (
+            'generativelanguage.googleapis.com' in host and 
+            'models' in path and 
+            ('generateContent' in path or 'streamGenerateContent' in path or 'listModels' in path)
+        )
+        
+        if is_gemini_api:
             return await self.handle_gemini_request(request, path)
         else:
-            # Pass through other requests unchanged
+            # Pass through all other requests (including auth) unchanged
             return await self.forward_request(request, path)
     
     async def handle_gemini_request(self, request: Request, path: str) -> Response:
@@ -381,17 +416,39 @@ class GeminiProxy(BaseProvider):
         self.child_pid, self.master_fd = pty.fork()
         
         if self.child_pid == 0:
-            # Child process - exec Gemini CLI with proxy environment
+            # Child process - exec Gemini CLI with selective proxy environment
             proxy_url = f"http://localhost:{self.config.listen_port}"
+            
+            # Only proxy Gemini API requests, not auth requests
+            # Use comprehensive NO_PROXY to exclude ALL authentication-related domains
             os.environ["HTTPS_PROXY"] = proxy_url
             os.environ["HTTP_PROXY"] = proxy_url
+            # Very comprehensive NO_PROXY - exclude all possible auth domains
+            no_proxy_domains = [
+                "accounts.google.com",
+                "oauth2.googleapis.com", 
+                "www.googleapis.com",
+                "googleapis.com",
+                "makersuite.google.com",
+                "*.google.com",
+                "*.googleapis.com",
+                "gstatic.com",
+                "*.gstatic.com",
+                "googleusercontent.com", 
+                "*.googleusercontent.com",
+                "localhost",
+                "127.0.0.1",
+                "::1"
+            ]
+            os.environ["NO_PROXY"] = ",".join(no_proxy_domains)
+            
+            # Terminal settings
             os.environ["TERM"] = "xterm-256color"
             os.environ["COLUMNS"] = str(cols)
             os.environ["ROWS"] = str(rows)
             
-            # Disable SSL verification for the proxy
-            os.environ["PYTHONHTTPSVERIFY"] = "0"
-            os.environ["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+            # Don't disable SSL verification globally - only for our proxy
+            # Remove the global SSL disable that was breaking auth
             
             # Launch Gemini CLI
             logger.info(f"Executing: {gemini_path}")
@@ -500,29 +557,60 @@ class GeminiProxy(BaseProvider):
         """Start the proxy server."""
         await self.setup()
         
+        # Check if port is available, find alternative if needed
+        original_port = self.config.listen_port
+        if is_port_in_use(self.config.listen_port):
+            if getattr(self.config, 'user_specified_port', False):
+                # User specified the port, don't auto-change it
+                print(f"\n❌ Port {self.config.listen_port} is already in use!")
+                print(f"💡 Try a different port:")
+                print(f"   omnara --agent=gemini --proxy-port {self.config.listen_port + 1}")
+                print(f"🔧 Or kill the existing process:")
+                print(f"   lsof -ti:{self.config.listen_port} | xargs kill")
+                return
+            else:
+                # User didn't specify port, try to find an available one
+                available_port = find_available_port(self.config.listen_port)
+                if available_port:
+                    logger.info(f"Port {self.config.listen_port} in use, using {available_port} instead")
+                    self.config.listen_port = available_port
+                    print(f"\n💡 Port {original_port} was in use, automatically using port {available_port}")
+                else:
+                    print(f"\n❌ No available ports found starting from {self.config.listen_port}!")
+                    print(f"💡 Try specifying a different port:")
+                    print(f"   omnara --agent=gemini --proxy-port {self.config.listen_port + 100}")
+                    print(f"🔧 Or kill existing processes and try again")
+                    return
+        
         # Create and start the web server
         runner = web.AppRunner(self.app)
         await runner.setup()
         
-        site = web.TCPSite(
-            runner,
-            'localhost',
-            self.config.listen_port
-        )
-        
-        await site.start()
-        logger.info(f"Proxy server listening on http://localhost:{self.config.listen_port}")
-        
-        # Launch Gemini CLI automatically if enabled
-        if getattr(self.config, 'auto_launch', True):
-            self.launch_gemini_cli()
-        
-        # Keep server running
         try:
-            await asyncio.Event().wait()
-        except KeyboardInterrupt:
-            logger.info("Shutting down proxy server...")
+            site = web.TCPSite(
+                runner,
+                'localhost',
+                self.config.listen_port
+            )
+            
+            await site.start()
+            logger.info(f"Proxy server listening on http://localhost:{self.config.listen_port}")
+            
+            # Launch Gemini CLI automatically if enabled
+            if getattr(self.config, 'auto_launch', True):
+                self.launch_gemini_cli()
+            
+            # Keep server running
+            try:
+                await asyncio.Event().wait()
+            except KeyboardInterrupt:
+                logger.info("Shutting down proxy server...")
+        
+        except OSError as e:
+            logger.error(f"Failed to start server: {e}")
+            print(f"\n❌ Failed to start proxy server: {e}")
         finally:
+            await runner.cleanup()
             await self.cleanup_async()
     
     async def cleanup_async(self):
@@ -561,6 +649,7 @@ class GeminiProxy(BaseProvider):
         # Cleanup HTTP client
         if self.client_session:
             await self.client_session.close()
+            self.client_session = None
         
         # Cleanup Omnara client
         if self.omnara_client:
@@ -615,6 +704,9 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
     
+    # Check if user specified a custom port
+    user_specified_port = "--port" in sys.argv or "--proxy-port" in sys.argv
+    
     # Create proxy config
     config = ProxyConfig(
         listen_port=args.port,
@@ -624,8 +716,9 @@ def main():
         debug=args.debug
     )
     
-    # Store launch preference
+    # Store launch preference and port preference
     config.auto_launch = not args.no_launch
+    config.user_specified_port = user_specified_port
     
     # Create and run proxy
     proxy = GeminiProxy(config)

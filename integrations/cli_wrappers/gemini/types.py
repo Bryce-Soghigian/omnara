@@ -190,6 +190,7 @@ class ProxyConfig:
     ssl_cert_path: Optional[str] = None
     ssl_key_path: Optional[str] = None
     auto_launch: bool = True
+    user_specified_port: bool = False
 
 
 # CLI wrapper mode
