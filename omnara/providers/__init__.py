@@ -40,10 +40,10 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
 
 def get_provider_config(provider_name: str) -> Optional[ProviderConfig]:
     """Get configuration for a specific provider.
-    
+
     Args:
         provider_name: Name of the provider (claude, amp, gemini, etc.)
-        
+
     Returns:
         ProviderConfig if provider exists, None otherwise
     """

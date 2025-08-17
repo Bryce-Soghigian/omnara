@@ -413,18 +413,18 @@ def run_agent_chat(args, unknown_args):
             and args.dangerously_skip_permissions
         ):
             new_argv.append("--dangerously-skip-permissions")
-    
+
     elif agent == "gemini":
         # Gemini-specific flags
         if hasattr(args, "proxy_port") and args.proxy_port:
             new_argv.extend(["--port", str(args.proxy_port)])
-        
+
         if hasattr(args, "model") and args.model:
             new_argv.extend(["--model", args.model])
-        
+
         if hasattr(args, "capture_thinking") and args.capture_thinking:
             new_argv.append("--capture-thinking")
-        
+
         # Always add debug for better visibility
         new_argv.append("--debug")
 

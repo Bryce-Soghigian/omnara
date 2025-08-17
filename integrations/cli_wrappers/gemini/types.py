@@ -12,9 +12,11 @@ from datetime import datetime
 # Role types
 Role = Literal["user", "model", "system"]
 
+
 # Finish reasons
 class FinishReason(str, Enum):
     """Reasons why generation stopped."""
+
     STOP = "STOP"
     MAX_TOKENS = "MAX_TOKENS"
     SAFETY = "SAFETY"
@@ -25,6 +27,7 @@ class FinishReason(str, Enum):
 # Safety categories
 class HarmCategory(str, Enum):
     """Safety harm categories."""
+
     HARM_CATEGORY_SEXUALLY_EXPLICIT = "HARM_CATEGORY_SEXUALLY_EXPLICIT"
     HARM_CATEGORY_HATE_SPEECH = "HARM_CATEGORY_HATE_SPEECH"
     HARM_CATEGORY_HARASSMENT = "HARM_CATEGORY_HARASSMENT"
@@ -34,6 +37,7 @@ class HarmCategory(str, Enum):
 # Safety probability levels
 class HarmProbability(str, Enum):
     """Probability levels for harm categories."""
+
     NEGLIGIBLE = "NEGLIGIBLE"
     LOW = "LOW"
     MEDIUM = "MEDIUM"
@@ -43,11 +47,13 @@ class HarmProbability(str, Enum):
 # Request types
 class TextPart(TypedDict):
     """Text content part."""
+
     text: str
 
 
 class InlineDataPart(TypedDict, total=False):
     """Inline data part for images, etc."""
+
     inline_data: Dict[str, Any]
 
 
@@ -56,12 +62,14 @@ Part = TextPart | InlineDataPart
 
 class Content(TypedDict):
     """Content block in request/response."""
+
     parts: List[Part]
     role: Optional[Role]
 
 
 class GenerationConfig(TypedDict, total=False):
     """Configuration for text generation."""
+
     temperature: float
     topP: float
     topK: int
@@ -72,18 +80,21 @@ class GenerationConfig(TypedDict, total=False):
 
 class SafetyRating(TypedDict):
     """Safety rating for content."""
+
     category: str
     probability: str
 
 
 class SafetySetting(TypedDict):
     """Safety threshold setting."""
+
     category: str
     threshold: str
 
 
 class GeminiRequest(TypedDict, total=False):
     """Request to Gemini API."""
+
     contents: List[Content]
     generationConfig: Optional[GenerationConfig]
     safetySettings: Optional[List[SafetySetting]]
@@ -92,6 +103,7 @@ class GeminiRequest(TypedDict, total=False):
 # Response types
 class Candidate(TypedDict):
     """Response candidate."""
+
     content: Content
     finishReason: str
     index: int
@@ -100,12 +112,14 @@ class Candidate(TypedDict):
 
 class PromptFeedback(TypedDict, total=False):
     """Feedback about the prompt."""
+
     safetyRatings: List[SafetyRating]
     blockReason: Optional[str]
 
 
 class GeminiResponse(TypedDict):
     """Response from Gemini API."""
+
     candidates: List[Candidate]
     promptFeedback: Optional[PromptFeedback]
 
@@ -113,6 +127,7 @@ class GeminiResponse(TypedDict):
 # Streaming response
 class StreamChunk(TypedDict):
     """A chunk in streaming response."""
+
     candidates: List[Candidate]
     promptFeedback: Optional[PromptFeedback]
 
@@ -120,6 +135,7 @@ class StreamChunk(TypedDict):
 # Model information
 class Model(TypedDict):
     """Model information."""
+
     name: str
     version: str
     displayName: str
@@ -136,27 +152,22 @@ class Model(TypedDict):
 @dataclass
 class GeminiSession:
     """Track a Gemini conversation session."""
+
     session_id: str
     started_at: datetime
     model: str = "gemini-pro"
     messages: List[Content] = field(default_factory=list)
     generation_config: Optional[GenerationConfig] = None
     omnara_agent_instance_id: Optional[str] = None
-    
+
     def add_user_message(self, text: str) -> None:
         """Add a user message to the session."""
-        self.messages.append({
-            "role": "user",
-            "parts": [{"text": text}]
-        })
-    
+        self.messages.append({"role": "user", "parts": [{"text": text}]})
+
     def add_model_message(self, text: str) -> None:
         """Add a model response to the session."""
-        self.messages.append({
-            "role": "model",
-            "parts": [{"text": text}]
-        })
-    
+        self.messages.append({"role": "model", "parts": [{"text": text}]})
+
     def get_request_contents(self) -> List[Content]:
         """Get contents formatted for API request."""
         return self.messages
@@ -166,6 +177,7 @@ class GeminiSession:
 @dataclass
 class InterceptedMessage:
     """Message intercepted by the proxy."""
+
     timestamp: datetime
     session_id: str
     role: Role
@@ -180,6 +192,7 @@ class InterceptedMessage:
 @dataclass
 class ProxyConfig:
     """Configuration for the Gemini proxy."""
+
     listen_port: int = 8080
     target_host: str = "generativelanguage.googleapis.com"
     omnara_api_key: str = ""
@@ -196,19 +209,22 @@ class ProxyConfig:
 # CLI wrapper mode
 class WrapperMode(str, Enum):
     """Mode for the Gemini wrapper."""
+
     PROXY = "proxy"  # HTTP/HTTPS proxy mode
-    PTY = "pty"      # PTY wrapper for gemini CLI
-    SDK = "sdk"      # Direct SDK wrapper
+    PTY = "pty"  # PTY wrapper for gemini CLI
+    SDK = "sdk"  # Direct SDK wrapper
 
 
 # Error types specific to Gemini
 class GeminiError(Exception):
     """Base error for Gemini provider."""
+
     pass
 
 
 class GeminiAPIError(GeminiError):
     """API-related errors."""
+
     def __init__(self, status_code: int, message: str):
         self.status_code = status_code
         self.message = message
@@ -217,11 +233,13 @@ class GeminiAPIError(GeminiError):
 
 class GeminiProxyError(GeminiError):
     """Proxy-related errors."""
+
     pass
 
 
 class GeminiAuthError(GeminiError):
     """Authentication errors."""
+
     pass
 
 
@@ -239,28 +257,23 @@ def extract_text_from_response(response: GeminiResponse) -> str:
     """Extract text from a Gemini response."""
     if not response.get("candidates"):
         return ""
-    
+
     candidate = response["candidates"][0]
     if "content" in candidate:
         return extract_text_from_content(candidate["content"])
-    
+
     return ""
 
 
 def create_simple_request(prompt: str, **config) -> GeminiRequest:
     """Create a simple Gemini request."""
     request: GeminiRequest = {
-        "contents": [
-            {
-                "parts": [{"text": prompt}],
-                "role": "user"
-            }
-        ]
+        "contents": [{"parts": [{"text": prompt}], "role": "user"}]
     }
-    
+
     if config:
         request["generationConfig"] = config
-    
+
     return request
 
 
@@ -271,7 +284,6 @@ __all__ = [
     "HarmCategory",
     "HarmProbability",
     "WrapperMode",
-    
     # Type definitions
     "TextPart",
     "InlineDataPart",
@@ -286,18 +298,15 @@ __all__ = [
     "GeminiResponse",
     "StreamChunk",
     "Model",
-    
     # Classes
     "GeminiSession",
     "InterceptedMessage",
     "ProxyConfig",
-    
     # Errors
     "GeminiError",
     "GeminiAPIError",
     "GeminiProxyError",
     "GeminiAuthError",
-    
     # Helper functions
     "extract_text_from_content",
     "extract_text_from_response",
